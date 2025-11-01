@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Picker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Simple spinner animation */
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #09f;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-full flex items-center justify-center p-6">
+
+    <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md">
+        
+        <!-- Header -->
+        <h1 class="text-3xl font-bold text-center mb-2 text-white">Movie Picker</h1>
+        <p class="text-gray-400 text-center mb-6">What genre are you in the mood for?</p>
+
+        <!-- Input Form -->
+        <div class="flex flex-col sm:flex-row gap-3 mb-4">
+            <input type="text" id="genre-input" placeholder="e.g., Sci-Fi, Comedy, Thriller..." class="flex-grow bg-gray-700 text-white placeholder-gray-500 px-4 py-3 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200">
+            <button id="pick-movie-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-lg shadow-md transition duration-200 ease-in-out transform hover:-translate-y-0.5">
+                Suggest Movie
+            </button>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="flex justify-center items-center h-24 hidden">
+            <div class="spinner"></div>
+            <p class="ml-4 text-gray-400">Finding a movie...</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="error-message" class="bg-red-900 border border-red-700 text-red-100 px-4 py-3 rounded-lg relative hidden" role="alert">
+            <strong class="font-bold">Oops!</strong>
+            <span class="block sm:inline" id="error-text">Something went wrong.</span>
+        </div>
+
+        <!-- Result Display -->
+        <div id="result" class="bg-gray-700 p-6 rounded-lg shadow-inner mt-6 hidden">
+            <h2 class="text-xl font-bold mb-2" id="movie-title"></h2>
+            <p class="text-gray-300" id="movie-summary"></p>
+
+            <!-- Source Attribution -->
+            <div id="sources" class="mt-4 pt-4 border-t border-gray-600">
+                <h3 class="text-xs font-semibold text-gray-500 uppercase mb-2">Sources:</h3>
+                <div id="source-list" class="text-sm text-gray-400 space-y-1"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const genreInput = document.getElementById('genre-input');
+        const pickMovieBtn = document.getElementById('pick-movie-btn');
+        const loading = document.getElementById('loading');
+        const resultDiv = document.getElementById('result');
+        const movieTitle = document.getElementById('movie-title');
+        const movieSummary = document.getElementById('movie-summary');
+        const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
+        const sourceList = document.getElementById('source-list');
+
+        // Add event listener for the button
+        pickMovieBtn.addEventListener('click', getMovieSuggestion);
+        
+        // Allow pressing Enter to submit
+        genreInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                getMovieSuggestion();
+            }
+        });
+
+        /**
+         * Fetches a movie suggestion from the Gemini API.
+         */
+        async function getMovieSuggestion() {
+            const genre = genreInput.value.trim();
+            if (!genre) {
+                displayError("Please enter a genre.");
+                return;
+            }
+
+            // --- Reset UI ---
+            loading.classList.remove('hidden');
+            resultDiv.classList.add('hidden');
+            errorMessage.classList.add('hidden');
+            pickMovieBtn.disabled = true;
+            pickMovieBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            // --- API Call ---
+            const systemPrompt = "You are a movie recommendation assistant. You will be given a genre and must suggest one single movie that fits that genre. You must respond with only the movie title on the first line, followed by a one-sentence summary on the second line. Do not add any conversational text like 'Here is a movie...' or 'I recommend...'.";
+            const userQuery = `Suggest one popular movie for the genre "${genre}".`;
+            const apiKey = ""; // API key is handled by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                tools: [{ "google_search": {} }] // Enable Google Search grounding
+            };
+
+            try {
+                const response = await fetchWithBackoff(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status} ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+                const text = candidate?.content?.parts?.[0]?.text;
+
+                if (text) {
+                    // Split the response into title and summary
+                    const parts = text.split('\n');
+                    const title = parts[0] || "No title found";
+                    const summary = parts[1] || "No summary available.";
+                    
+                    displayResult(title, summary);
+
+                    // Handle grounding metadata
+                    const groundingMetadata = candidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        const sources = groundingMetadata.groundingAttributions
+                            .map(attr => ({
+                                uri: attr.web?.uri,
+                                title: attr.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                        displaySources(sources);
+                    } else {
+                        displaySources([]);
+                    }
+
+                } else {
+                    throw new Error("Invalid response structure from API.");
+                }
+
+            } catch (error) {
+                console.error("Error fetching movie suggestion:", error);
+                displayError("Sorry, I couldn't find a movie. Please try again.");
+            } finally {
+                // --- Re-enable UI ---
+                loading.classList.add('hidden');
+                pickMovieBtn.disabled = false;
+                pickMovieBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        /**
+         * Displays the movie result.
+         */
+        function displayResult(title, summary) {
+            movieTitle.textContent = title;
+            movieSummary.textContent = summary;
+            resultDiv.classList.remove('hidden');
+        }
+
+        /**
+         * Displays source attribution links.
+         */
+        function displaySources(sources) {
+            sourceList.innerHTML = ''; // Clear previous sources
+            if (sources.length === 0) {
+                sourceList.innerHTML = '<p class="text-sm text-gray-500">No web sources found.</p>';
+                return;
+            }
+
+            sources.forEach(source => {
+                const link = document.createElement('a');
+                link.href = source.uri;
+                link.textContent = source.title;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.className = 'block truncate text-blue-400 hover:text-blue-300 hover:underline';
+                sourceList.appendChild(link);
+            });
+        }
+
+        /**
+         * Displays an error message.
+         */
+        function displayError(message) {
+            errorText.textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+
+        /**
+         * Implements fetch with exponential backoff.
+         */
+        async function fetchWithBackoff(url, options, retries = 3, delay = 1000) {
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok && response.status === 429 && retries > 0) {
+                    // Throttled, retry with backoff
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithBackoff(url, options, retries - 1, delay * 2);
+                }
+                return response;
+            } catch (error) {
+                if (retries > 0) {
+                    // Network or other fetch error, retry
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithBackoff(url, options, retries - 1, delay * 2);
+                }
+                throw error; // Max retries reached
+            }
+        }
+
+    </script>
+</body>
+</html>
